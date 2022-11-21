@@ -1,12 +1,154 @@
-version: '3.3'
+
+x-commcarehq_base: &commcarehq_base
+  image: commcarehq_incl:latest
+  privileged: true  # allows mount inside container
+  depends_on:
+    - postgres
+    - couch
+    - redis
+    - elasticsearch2
+    - kafka
+    - zookeeper
+    - minio
+  volumes:
+    - shared_files:/sharedfiles
 
 services:
-  # example package component containers
-  template-new-file-config-component:
-    image: jembi/configurable-canned-response-server:latest
-    container_name: template-new-file-config-component
+  web:
+    <<: *commcarehq_base
+    command: './manage.py runserver 0.0.0.0:8000'
+    expose:
+      - 8000
+    ports:
+      - "8000:8000"
+
+  celery:
+    <<: *commcarehq_base
+    command: 'celery -A corehq worker -l info'
+
+  pillowtop:
+    <<: *commcarehq_base
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: kafka
+    command: './manage.py run_ptop --all --processor-chunk-size=1'
+
+  formplayer:
+    image: dimagi/formplayer
+    environment:
+      COMMCARE_HOST: "http://web:8000"
+      COMMCARE_ALTERNATE_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000"
+      AUTH_KEY: "secretkey"
+      EXTERNAL_REQUEST_MODE: "replace-host"
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    expose:
+      - "8080"
+      - "8081"
+
+  postgres:
+    image: dimagi/docker-postgresql:14
+    environment:
+      POSTGRES_USER: commcarehq
+      POSTGRES_PASSWORD: commcarehq
     volumes:
-      - template-file-config-component-volume:/home/node/app/
+      - postgresql:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    expose:
+      - "5432"
+
+  couch:
+    image: dimagi/couchdb-dev:3.1.1
+    command: ["--with-haproxy", "--with-admin-party-please", "-n", "1"]
+    ulimits:
+      # Fix high CPU usage (1048576 is the default, 1024 fixed it)
+      # https://groups.google.com/forum/#!topic/rabbitmq-users/hO06SB-QBqc
+      nofile:
+        soft: 1024
+        hard: 1048576
+    volumes:
+      - couchdb2:/usr/src/couchdb/dev/lib/node1/data
+    ports:
+      - "5984:5984"
+    expose:
+      - "5984"
+
+  redis:
+    image: redis:6.2
+    volumes:
+      - redis:/data
+    ports:
+      - "6379:6379"
+    expose:
+      - "6379"
+
+  elasticsearch2:
+    build:
+      context: .
+      dockerfile: ./files/Dockerfile_es
+    volumes:
+      - elasticsearch2:/usr/share/elasticsearch/data
+      - ./services/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:rw
+    command: elasticsearch --cluster.name=instant_hq
+    environment:
+      ES_CLUSTER_NAME: "instant_hq"
+      ES_JAVA_OPTS: "-Des.script.engine.groovy.inline.aggs=true -Des.script.engine.groovy.inline.search=true"
+    ports:
+      - "9200:9200"
+    expose:
+      - "9200"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.2.2 # kafka v3.2.2
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_BROKER_ID: 1
+      KAFKA_INTER_BROKER_LISTENER_NAME: HQ_KAFKA
+      KAFKA_LISTENERS: HQ_KAFKA://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: HQ_KAFKA://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HQ_KAFKA:PLAINTEXT
+      CUSTOM_INIT_SCRIPT: |
+        URL="https://raw.githubusercontent.com/vishnubob/wait-for-it/c096cface5fbd9f2d6b037391dfecae6fde1362e/wait-for-it.sh"
+        if curl --max-time 10 $$URL > wait.sh ; then
+          chmod +x ./wait.sh
+          ./wait.sh -t 30 zookeeper:2181 || exit 1
+        else
+          echo "Wait script download failed"
+        fi
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - kafka:/kafka/kafka-logs-1
+    ports:
+      - "9092:9092"
+    expose:
+      - "9092"
+
+  zookeeper:
+    image: zookeeper:3.7
+    volumes:
+      - zookeeper:/opt/zookeeper-3.7/data
+    ports:
+      - "2181:2181"
+    expose:
+      - "2181"
+
+  minio:
+    image: minio/minio
+    command: server --address :9980 /data
+    volumes:
+      - minio-conf:/root/.minio
+      - minio-data:/data
+    environment:
+      MINIO_ACCESS_KEY: admin-key
+      MINIO_SECRET_KEY: admin-secret
+    ports:
+      - "9980:9980"
+    expose:
+      - "9980"
 
 volumes:
-  template-file-config-component-volume:
+  shared_files:
