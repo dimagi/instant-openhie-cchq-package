@@ -1,8 +1,8 @@
 {
-  "id": "template",
-  "name": "Instant OpenHIE Template Package",
-  "description": "An Instant OpenHIE Template Package from which to build custom packages.",
+  "id": "commcare-hq",
+  "name": "CommCare HQ Instant OpenHIE package",
+  "description": "An Instant OpenHIE package for CommCare HQ, a community health information system.",
   "type": "infrastructure",
-  "version": "v0.0.0",
+  "version": "v0.0.1",
   "dependencies": ["core"]
 }
